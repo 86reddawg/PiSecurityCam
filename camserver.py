@@ -1,5 +1,6 @@
 #!/usr/bin/python
 #Run this on the main server to collect recordings from the various pi security cams
+#Note, this is a very rough draft
 
 HOST = ''
 PORT = 50007

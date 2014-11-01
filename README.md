@@ -6,6 +6,8 @@ processing is not within the scope of this project.
 
 Intended application will be multiple Pi's recording autonomously, then interacting with a common
 server for archive/presentation to the user.  Server will do any heavy encoding/processing as required.
+If using the server option, FTP needs to be setup on the individual pi security cams.
+
 
 Output of this program can by piped to another for both security cam recording as well as streaming.
 

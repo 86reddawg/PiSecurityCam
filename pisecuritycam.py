@@ -37,7 +37,7 @@ deleteonack = True #This isn't implemented yet, server assumes all should be del
 #h264 bitstream. For instance, to use cvlc to stream to http://localip:8090/, use something like:
 #> pisecuritycam.py | cvlc - --sout '#standard{access=http,mux=ts{use-key-frames},dst=:8090}' :demux=h264
 #see streamvlc script for example
-streamvideo = True
+streamvideo = False
 
 startcode = b'\0\0\0\1'
 cmd = 'raspivid -g 10 -n -t 0 -b ' + str(bitrate) + ' -rot 180 -w '+ str(width) +' -h '+ str(height) +' -fps 29 -pf high -sh 65 -br 60 -ex night -o -'
