@@ -13,10 +13,8 @@
 #after event concludes, system returns to prefault buffer.
 #####################################################################################################
 
-#TODO - also stream video? (dump stdout to streamer with tee?)
 #TODO - add ethernet trigger
 #TODO - add parallel audio recording?
-#TODO - decode/verify h264 header - probably changes for different vid parameters
 #TODO - lots of error handling - if os.killpg doesn't run at end, raspivid remains running. (kill on startup?)
 
 
@@ -28,28 +26,23 @@ width = 1920
 height = 1080
 prefault = 10	#will record up to prefault seconds, depending on how full the buffer is
 postfault = 5	#will record at least postfault seconds, up to 1 sec more depending on when the motion subsides
+
+#Server to inform of recordings (remote server needs to be running camserver.py)
 server = '192.168.1.1'
 port = 50007
+deleteonack = True #This isn't implemented yet, server assumes all should be deleted
 
 #The streamvideo option disables messages and instead dumps the raspivid stream back onto stdout. 
 #Pipe this python program to streamer of choice or display will be flooded with text rendition of 
 #h264 bitstream. For instance, to use cvlc to stream to http://localip:8090/, use something like:
-#> python.py | cvlc - --sout '#standard{access=http,mux=ts{use-key-frames},dst=:8090}' :demux=h264
+#> pisecuritycam.py | cvlc - --sout '#standard{access=http,mux=ts{use-key-frames},dst=:8090}' :demux=h264
+#see streamvlc script for example
 streamvideo = True
 
-
-#header = b'\x00\x00\x00\x01\x27\x64\x00\x28\xac\x2b\x40\x3c\x01\x13\xf2\xc0\x3c\x48\x9a\x90\x00\x00\x00\x01\x28\xee\x02\x5c\xb0'
-#header = b'\x00\x00\x00\x01\x27\x64\x00\x28\xac\x2b\x40\x3c\x01\x13\xf2\xc0\x3c\x48\x9a\x80\x00\x00\x00\x01\x28\xee\x02\x5c\xb0'
 startcode = b'\0\0\0\1'
-raspivid = 'raspivid -g 10 -n -t 0 -b ' + str(bitrate) + ' -rot 180 -w '+ str(width) +' -h '+ str(height) +' -fps 29 -pf high -sh 65 -br 60 -ex night -o -'
+cmd = 'raspivid -g 10 -n -t 0 -b ' + str(bitrate) + ' -rot 180 -w '+ str(width) +' -h '+ str(height) +' -fps 29 -pf high -sh 65 -br 60 -ex night -o -'
 PIR_PIN = 21
-#vlc = " | cvlc -vvv - --sout '#duplicate{dst=standard{access=http,mux=ts{use-key-frames},dst=:8090},dst=standard{access=file,mux=ts,dst=-}' :demux=h264 2> /dev/null"
-#vlc = " | tee >(cvlc -vvv stream:///dev/stdin --sout '#standard{access=http,mux=ts{use-key-frames},dst=:8090}' :demux=h264)"
-#cmd = raspivid + vlc
-cmd = raspivid
-#print cmd
 
-#filename = 'test.h264'
 #sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # disable STDOUT buffer
 
 def main():
@@ -58,8 +51,6 @@ def main():
     p = subprocess.Popen(cmd, shell=True, stdout = subprocess.PIPE, preexec_fn = os.setsid)
     header, temp = getheader()
     fcntl.fcntl(p.stdout.fileno(), fcntl.F_SETFL, os.O_NONBLOCK) # this causes the read/readline to no longer wait to fill from stdout
-
-    #change to main while loop when detection setup, for now just run a couple of times with a pause to prove encoding works
     while True:
 	try:
 	    video,temp = buffer(temp) #wait for trigger, return buffer data plus extra data sent to recorder so no frame loss at trigger point
@@ -74,7 +65,6 @@ def main():
 	except KeyboardInterrupt:
 	    print 'Keyboard Interrupt'
 	    break
-    #cleanup
     cleanup()
 
 def record(filename,temp):
