@@ -1,0 +1,2 @@
+#!/bin/bash
+./pisecuritycam.py | cvlc - --sout-x264-preset ultrafast --sout-x264-vbv-bufsize 1500 --sout '#standard{access=http,mux=ts{use-key-frames},dst=:80}' :demux=h264
