@@ -21,11 +21,11 @@
 import subprocess, time, os, signal, sys, fcntl, datetime, logging, socket, thread
 import RPi.GPIO as GPIO
 
-bitrate = 16000000	#video bitrate (bits/s)
-width = 1920
-height = 1080
-prefault = 10	#will record up to prefault seconds, depending on how full the buffer is
-postfault = 5	#will record at least postfault seconds, up to 1 sec more depending on when the motion subsides
+bitrate = 1000000	#video bitrate (bits/s)
+width = 1280
+height = 960
+prefault = 3	#will record up to prefault seconds, depending on how full the buffer is
+postfault = 7	#will record at least postfault seconds, up to 1 sec more depending on when the motion subsides
 
 #Server to inform of recordings (remote server needs to be running camserver.py)
 server = '192.168.1.1'
@@ -37,10 +37,10 @@ deleteonack = True #This isn't implemented yet, server assumes all should be del
 #h264 bitstream. For instance, to use cvlc to stream to http://localip:8090/, use something like:
 #> pisecuritycam.py | cvlc - --sout '#standard{access=http,mux=ts{use-key-frames},dst=:8090}' :demux=h264
 #see streamvlc script for example
-streamvideo = False
+streamvideo = True
 
 startcode = b'\0\0\0\1'
-cmd = 'raspivid -g 10 -n -t 0 -b ' + str(bitrate) + ' -rot 180 -w '+ str(width) +' -h '+ str(height) +' -fps 29 -pf high -sh 65 -br 60 -ex night -o -'
+cmd = 'raspivid -g 15 -n -t 0 -b ' + str(bitrate) + ' -rot 180 -w '+ str(width) +' -h '+ str(height) +' -fps 30 -pf high -sh 65 -br 70 -ex night -o -'
 PIR_PIN = 21
 
 #sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # disable STDOUT buffer
@@ -48,9 +48,11 @@ PIR_PIN = 21
 def main():
     global p
     #start video stream to stdout
-    p = subprocess.Popen(cmd, shell=True, stdout = subprocess.PIPE, preexec_fn = os.setsid)
-    header, temp = getheader()
+    p = subprocess.Popen(cmd, shell=True, bufsize=bitrate, stdout = subprocess.PIPE, preexec_fn = os.setsid)
     fcntl.fcntl(p.stdout.fileno(), fcntl.F_SETFL, os.O_NONBLOCK) # this causes the read/readline to no longer wait to fill from stdout
+    header, temp = getheader()
+
+
     while True:
 	try:
 	    video,temp = buffer(temp) #wait for trigger, return buffer data plus extra data sent to recorder so no frame loss at trigger point
@@ -61,7 +63,7 @@ def main():
 	    temp = record(filename,temp)	#continue recording while motion active + postfault
 	    display('Motion + post record time: '+str(time.time()-ts))
 	    thread.start_new_thread(sendserver, (filename,))
-	    time.sleep(1)
+#	    time.sleep(1)
 	except KeyboardInterrupt:
 	    print 'Keyboard Interrupt'
 	    break
@@ -70,25 +72,67 @@ def main():
 def record(filename,temp):
     display('Motion Recording...')
     post = time.time()
+    data = ''
     while (motion or (time.time()-post < postfault)):
-        if motion:	#while motion exists, keep postfault count fresh (this handles continual motion and retriggers)
-	    post = time.time()
-	else:
-	    display('Post Recording Time Left: '+str(postfault - (time.time()-post)))
-        start = temp[temp.find(startcode):] # get rid of all data before start string
-        data = ''
-	ts = time.time()
-	while (time.time()-ts<1): #read one second worth of data
-	    data += dataread('all') #keep reading until we hit one second
-	temp = dataread('line')
+        if motion: post = time.time()	#while motion exists, keep postfault count fresh (this handles continual motion and retriggers)
+	else: display('Post Recording Time Left: '+str(postfault - (time.time()-post)))
+	start = temp + dataread('all')
+
+        #start = temp[temp.find(startcode):] # get rid of all data before start string
+#	ts = time.time()
+#	while (time.time()-ts<1): #read one second worth of data
+#	    data += dataread('all') #keep reading until we hit one second
+#	    time.sleep(.1)
+	time.sleep(1)
+	data = dataread('all')
+	temp = dataread('all')
 	while startcode not in temp:
-	    temp += dataread('line')
-	finish = temp[:temp.find(startcode)] # get rid of all data  after next start string (including start string)
-	temp = temp[temp.find(startcode):]
+	    temp += dataread('all')
+	snip = temp.find(startcode)
+	finish = temp[:snip] # get rid of all data  after next start string (including start string)
+	temp = temp[snip:]
 	data = start + data + finish # Each data[] has a complete start/end, no partial frames
-	thread.start_new_thread(append, (filename,data))
+	append(filename,data)
+	#thread.start_new_thread(append, (filename,data))
 	#append(filename,data)
     return temp
+
+def buffer(temp):
+    global motion
+    display('Starting buffer...')
+    #dataread('all')	#clear out the buffer
+    data = ['']*prefault # Data will be recorded in 1 second intervals and shifted in FIFO style
+    while not motion:
+	try:
+	    #For efficiency, better idea to write data round robin, then figure out how to stitch together
+	    #later instead of moving big chuncks of data every second?
+    	    for y in range(0, prefault-1):	#shift data in FIFO style
+		data[y] = data[y+1]		#0=1, 1=2, 2=3, 3=4, etc
+	    while startcode not in temp:
+		temp = dataread('all')
+    	    start = temp[temp.find(startcode):] # get rid of all data before start string
+    	    data[prefault-1] = ''
+	    ts = time.time()
+	    while (time.time()-ts<1): #read one second worth of data
+		data[prefault-1] += dataread('line') #keep reading until we hit 1 second
+		time.sleep(0.1)
+#	    time.sleep(0.5)
+#	    data[prefault-1] = dataread('all')
+#	    time.sleep(0.5)
+#	    data[prefault-1] += dataread('all')
+
+
+	    temp = dataread('all')
+	    while startcode not in temp:
+		temp += dataread('all')
+	    finish = temp[:temp.find(startcode)] # get rid of all data  after next start string (including start string)
+	    temp = temp[temp.find(startcode):]
+	    data[prefault-1] = start + data[prefault-1] + finish # Each data[] has a complete start/end, no partial frames
+	except KeyboardInterrupt:
+	    display('Keyboard Interrupt')
+	    cleanup()
+    return ''.join(data),temp	#concatenate all data together, pass remaining data back into play
+#    return data[0]+data[1]+data[2]+data[3]+data[4]
 
 #Instead of building a header from scratch (decoding the spec is too much work), just scrape the header from
 #when we first start up and apply that to all subsequent videos created. (header changes based on bitrate/fps/etc)
@@ -97,10 +141,11 @@ def getheader():
     c = -1
     try:
 	while c < 1:
-	    data += dataread('line')
+	    data += dataread('all')
 	    a = data.find(startcode)+len(startcode) #Finds initial startcode for header
 	    b = data[a:].find(startcode)+len(startcode)+a #finds secondary startcode
 	    c = data[b:].find(startcode)+b #third startcode should indicate the start of actual video frames
+	    display('header')
     except IOError:
         pass
 	#TODO - better error handling... exit program if no header can be found as all vids will be corrupt
@@ -108,35 +153,6 @@ def getheader():
     temp = data[c:] #Pass the remaining bitstream back into play
     return data, temp
 
-
-def buffer(temp):
-    global motion
-    display('Starting buffer...')
-    dataread('all')	#clear out the buffer
-    data = ['']*prefault # Data will be recorded in 1 second intervals and shifted in FIFO style
-    while startcode not in temp:
-        temp = dataread('line')
-    while not motion:
-	try:
-	    #For efficiency, better idea to write data round robin, then figure out how to stitch together
-	    #later instead of moving big chuncks of data every second?
-    	    for y in range(0, prefault-1):	#shift data in FIFO style
-		data[y] = data[y+1]		#0=1, 1=2, 2=3, 3=4, etc
-    	    start = temp[temp.find(startcode):] # get rid of all data before start string
-    	    data[prefault-1] = ''
-	    ts = time.time()
-	    while (time.time()-ts<1): #read one second worth of data
-		data[prefault-1] += dataread('all') #keep reading until we hit 1 second
-	    temp = dataread('line')
-	    while startcode not in temp:
-		temp += dataread('line')
-	    finish = temp[:temp.find(startcode)] # get rid of all data  after next start string (including start string)
-	    data[prefault-1] = start + data[prefault-1] + finish # Each data[] has a complete start/end, no partial frames
-	except KeyboardInterrupt:
-	    display('Keyboard Interrupt')
-	    cleanup()
-    return ''.join(data),temp	#concatenate all data together, pass remaining data back into play
-#    return data[0]+data[1]+data[2]+data[3]+data[4]
 
 def append(filename,video):
     filename = '/home/picam/video/'+filename
@@ -158,6 +174,9 @@ def dataread(amt):
         	grab += bytes(p.stdout.readline())
 	    if amt == 'all':
         	grab += bytes(p.stdout.read())
+	    if amt == 'flush':
+        	grab += bytes(p.stdout.flush())
+		break
 	    else:
         	grab += bytes(p.stdout.readline())
         except IOError:
@@ -170,7 +189,7 @@ def dataread(amt):
 
 def display(string):
     ts = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-    output = ts+' - '+string
+    output = ts+' - '+str(string)
     if not streamvideo:
 	print output
     return output
@@ -209,6 +228,7 @@ def getserial():
     return cpuserial
 
 def sendserver(string):
+    time.sleep(3)
     #TODO - much needed error handling here
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((server, port))
